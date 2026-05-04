@@ -2,8 +2,6 @@
 
 from typing import Any
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-
 from nira_backend.agents.base_agent import BaseAgent
 from nira_backend.agents.tools.database_tools import (
     make_dietary_tools,
@@ -19,7 +17,7 @@ from nira_backend.agents.tools.parsing_tools import (
     make_meal_parsing_tools,
 )
 from nira_backend.database.connection import DatabaseConnection
-from nira_backend.llm.config import get_api_key
+from nira_backend.llm.factory import build_llm
 
 _SYSTEM_PROMPT = """\
 You are NIRA's nutrition specialist.  You help the family track food intake,
@@ -29,49 +27,44 @@ personalised dietary suggestions.
 YOUR RESPONSIBILITIES:
 
 1. Meal logging
-   - Log meals that family members eat (structured input or free-text).
+   - Log meals that family members report (structured or from free text).
    - Use parse_and_log_meal for free-text descriptions.
-   - Use log_meal when the user gives explicit amounts.
+   - Use log_meal when the user gives explicit food name, quantity, and meal type.
+   - Always confirm what was logged: food, quantity, and meal type.
 
-2. Food catalog
-   - Add new food items to the catalog via add_food_item.
-   - Search the catalog with search_food_catalog.
+2. Food catalogue management
+   - Add new food items to the catalogue with add_food_item.
+   - Search the catalogue with search_food_catalog.
 
 3. Fridge / pantry inventory
-   - Add items: use parse_and_add_to_fridge for free text (e.g. "I bought 6 eggs
-     and 1 litre of oat milk") or add_to_fridge for structured input.
-   - Update quantities with update_fridge_quantity.
+   - Add items with add_to_fridge or parse_and_add_to_fridge (for free text).
+   - Update quantities with update_fridge_quantity (e.g. "I used 200g of chicken").
    - Remove items with remove_from_fridge.
-   - Show contents with list_fridge_contents; warn about expiring items.
-   - Always mention items expiring within 3 days when relevant.
+   - Check what's in stock with list_fridge_contents.
+   - Flag expiring items with get_expiring_items.
 
 4. Dietary suggestions
-   - When asked for food suggestions or meal recommendations, ALWAYS call
-     get_dietary_context first to gather recent meals, health data, and inventory.
-   - Base suggestions on what is actually available in the fridge when asked.
-   - Consider health metrics (e.g. suggest low-sodium foods if blood pressure is
-     elevated, or low-sugar options if glucose is borderline).
-   - Prioritise ingredients expiring soon to reduce waste.
-   - Be specific — name actual foods and meals, not generic advice.
-   - Offer 2–3 concrete meal ideas rather than a long list.
+   - Call get_dietary_context before making food suggestions — it bundles
+     recent meals, health data, and fridge inventory in one call.
+   - Prioritise ingredients expiring soon.
+   - Consider health signals: elevated BP → low sodium, high glucose → low GI,
+     poor sleep → magnesium-rich foods (pumpkin seeds, leafy greens, almonds).
 
 GUIDELINES:
-- Always confirm what was logged or added so the user knows it was recorded.
-- Be warm, practical, and encouraging — small consistent habits matter.
-- If you lack key information to log something, ask one focused question.
-- Never fabricate nutritional data; only report what is in the database.
+  - Be specific: suggest actual foods, not generic advice.
+  - When in doubt about portion size, ask.
+  - Never recommend supplements or medical interventions.
 """
 
 
 class NutritionAgent(BaseAgent):
     """
-    Agent specialising in food, meals, fridge inventory, and dietary advice.
+    Agent specialising in food tracking, inventory management, and dietary advice.
 
     Args:
         db: Active database connection.
-        api_key: Gemini API key.  Reads from secrets file if not provided.
+        api_key: API key for the active LLM provider. Reads from env/file if absent.
         data_dir: Override data directory for memory (tests).
-        llm_model: Gemini model name.
         temperature: LLM temperature.
     """
 
@@ -80,14 +73,9 @@ class NutritionAgent(BaseAgent):
         db: DatabaseConnection,
         api_key: str | None = None,
         data_dir: Any = None,
-        llm_model: str = "gemini-2.0-flash",
         temperature: float = 0.3,
     ) -> None:
-        llm = ChatGoogleGenerativeAI(
-            model=llm_model,
-            google_api_key=api_key or get_api_key("gemini"),
-            temperature=temperature,
-        )
+        llm = build_llm("nutrition", api_key=api_key, temperature=temperature)
         tools = (
             make_shared_db_tools(db)
             + make_fridge_db_tools(db)

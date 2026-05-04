@@ -1,8 +1,8 @@
 """MainAgent — the single interface the user communicates with.
 
 NIRA (Nutrition, Information, Record, Advisor) is the top-level agent that
-orchestrates NutritionAgent, HealthAgent, and ExerciseAgent.  The user only
-ever talks to NIRA; NIRA decides which specialist(s) to consult.
+orchestrates NutritionAgent, HealthAgent, ExerciseAgent, and ShoppingAgent.
+The user only ever talks to NIRA; NIRA decides which specialist(s) to consult.
 """
 
 from datetime import date
@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 from nira_backend.agents.base_agent import BaseAgent
 from nira_backend.agents.exercise_agent import ExerciseAgent
@@ -21,7 +20,7 @@ from nira_backend.config import get_database_path
 from nira_backend.data_models.human import Human
 from nira_backend.database.connection import DatabaseConnection
 from nira_backend.database.repositories import HumanRepository
-from nira_backend.llm.config import get_api_key
+from nira_backend.llm.factory import build_llm
 
 _SYSTEM_PROMPT = """\
 You are NIRA, a personal AI assistant for family health and wellness management.
@@ -30,15 +29,17 @@ You are warm, supportive, and practical.
 You manage four specialist agents:
 - Nutrition Agent: food/meal logging, nutritional analysis, fridge/pantry inventory,
   dietary suggestions based on recent habits and available ingredients.
-- Health Agent: blood pressure, blood glucose, heart rate, sleep tracking and trends.
-- Exercise Agent: exercise sessions, activity history, fitness motivation.
+- Health Agent: blood pressure, blood glucose, heart rate, sleep tracking and trends,
+  plus non-metric health events (illness, injury, pain, fatigue, stress).
+- Exercise Agent: exercise sessions, activity history, personalised fitness
+  recommendations based on recent training patterns.
 - Shopping Agent: personalised weekly shopping lists based on eating habits, health
   conditions, nutritional gaps, seasonal produce, and fridge inventory.
 
 How to handle requests:
 - For food/meal/nutrition/fridge/inventory/dietary advice → delegate to the Nutrition Agent.
-- For health readings, records, or trends → delegate to the Health Agent.
-- For exercise, workouts, or activity → delegate to the Exercise Agent.
+- For health readings, records, trends, or health incidents → delegate to the Health Agent.
+- For exercise, workouts, activity, or fitness recommendations → delegate to the Exercise Agent.
 - For shopping lists, groceries, what to buy, weekly shop → delegate to the Shopping Agent.
 - For general family management (adding members, listing family) → handle directly.
 - When a request spans multiple domains, consult each relevant agent in turn.
@@ -62,9 +63,8 @@ class MainAgent(BaseAgent):
 
     Args:
         db_path: Path to the SQLite database.  Defaults to the path from config.
-        api_key: Gemini API key.  Reads from secrets file if not provided.
+        api_key: API key for the active LLM provider. Reads from env/file if absent.
         data_dir: Override data directory for memory storage (tests).
-        llm_model: Gemini model name.
         temperature: LLM temperature for the main agent.
     """
 
@@ -73,33 +73,25 @@ class MainAgent(BaseAgent):
         db_path: Path | None = None,
         api_key: str | None = None,
         data_dir: Any = None,
-        llm_model: str = "gemini-2.0-flash",
         temperature: float = 0.5,
     ) -> None:
-        resolved_api_key = api_key or get_api_key("gemini")
         resolved_db_path = db_path or get_database_path()
-
         self._db = DatabaseConnection(resolved_db_path)
 
         self._nutrition_agent = NutritionAgent(
-            db=self._db, api_key=resolved_api_key, data_dir=data_dir
+            db=self._db, api_key=api_key, data_dir=data_dir
         )
         self._health_agent = HealthAgent(
-            db=self._db, api_key=resolved_api_key, data_dir=data_dir
+            db=self._db, api_key=api_key, data_dir=data_dir
         )
         self._exercise_agent = ExerciseAgent(
-            db=self._db, api_key=resolved_api_key, data_dir=data_dir
+            db=self._db, api_key=api_key, data_dir=data_dir
         )
         self._shopping_agent = ShoppingAgent(
-            db=self._db, api_key=resolved_api_key, data_dir=data_dir
+            db=self._db, api_key=api_key, data_dir=data_dir
         )
 
-        llm = ChatGoogleGenerativeAI(
-            model=llm_model,
-            google_api_key=resolved_api_key,
-            temperature=temperature,
-        )
-
+        llm = build_llm("main", api_key=api_key, temperature=temperature)
         tools = self._make_tools()
 
         super().__init__(
@@ -154,132 +146,109 @@ class MainAgent(BaseAgent):
             """
             Delegate a nutrition, food, or meal-related question to the
             Nutrition Agent.  Use for logging meals, searching food items,
-            analysing eating habits, or any food-related request.
+            analysing eating habits, managing the fridge/pantry inventory,
+            or getting personalised dietary suggestions.
 
             Args:
-                query: The specific question or task for the Nutrition Agent.
+                query: The nutrition-related question or instruction.
             """
             return nutrition_agent.run(query)
 
         @tool
         def ask_health_agent(query: str) -> str:
             """
-            Delegate a health-record question to the Health Agent.  Use for
-            logging blood pressure, blood glucose, heart rate, or sleep, and
-            for reviewing health trends.
+            Delegate a health-related question to the Health Agent.  Use for
+            logging health metrics (blood pressure, glucose, heart rate, sleep),
+            reviewing health history, recording non-metric health events
+            (illness, injury, pain, fatigue, stress), or analysing trends.
 
             Args:
-                query: The specific question or task for the Health Agent.
+                query: The health-related question or instruction.
             """
             return health_agent.run(query)
 
         @tool
         def ask_exercise_agent(query: str) -> str:
             """
-            Delegate an exercise or physical activity question to the Exercise
-            Agent.  Use for logging workouts, reviewing activity history, or
-            exercise-related advice.
+            Delegate an exercise-related question to the Exercise Agent.  Use
+            for logging workouts, reviewing activity history, or getting
+            personalised exercise recommendations based on recent training.
 
             Args:
-                query: The specific question or task for the Exercise Agent.
+                query: The exercise-related question or instruction.
             """
             return exercise_agent.run(query)
 
         @tool
         def ask_shopping_agent(query: str) -> str:
             """
-            Delegate a shopping list or grocery planning request to the Shopping
-            Agent.  Use for generating weekly shopping lists, recommending what
-            to buy based on eating habits and health, or asking what groceries
-            would improve the family's nutritional balance.
+            Delegate a shopping-related question to the Shopping Agent.  Use
+            for generating weekly shopping lists based on eating habits, health
+            conditions, nutritional gaps, and fridge inventory.
 
             Args:
-                query: The specific shopping or grocery question.
+                query: The shopping-related question or instruction.
             """
             return shopping_agent.run(query)
 
         @tool
         def add_family_member(
             name: str,
-            gender: str,
             date_of_birth: str,
+            gender: str,
             weight_kg: float,
             height_cm: float,
         ) -> str:
             """
-            Register a new family member in the system.
+            Add a new person to the family profile.
 
             Args:
-                name: Full name of the person.
-                gender: One of 'male', 'female', 'undisclosed'.
+                name: Full name of the family member.
                 date_of_birth: Date of birth in YYYY-MM-DD format.
+                gender: 'male', 'female', or 'other'.
                 weight_kg: Current weight in kilograms.
                 height_cm: Height in centimetres.
             """
-            human_repo = HumanRepository(db)
             human = Human(
                 name=name,
-                gender=gender,  # type: ignore[arg-type]
                 date_of_birth=date.fromisoformat(date_of_birth),
+                gender=gender,  # type: ignore[arg-type]
                 weight=weight_kg,
                 height=height_cm,
             )
-            hid = human_repo.create(human)
+            repo = HumanRepository(db)
+            hid = repo.create(human)
             return (
-                f"Family member '{name}' registered successfully [ID {hid}]. "
-                f"BMI: {human.bmi} ({human.bmi_category})."
+                f"Added {name} to the family "
+                f"(DOB: {date_of_birth}, {gender}, "
+                f"{weight_kg} kg, {height_cm} cm) [ID {hid}]"
             )
 
         @tool
         def list_family_members() -> str:
-            """List all family members currently registered in the system."""
-            human_repo = HumanRepository(db)
-            humans = human_repo.get_all()
-            if not humans:
-                return "No family members registered yet. Use add_family_member to add one."
-            today = date.today()
+            """List all family members with their basic profile information."""
+            repo = HumanRepository(db)
+            members = repo.get_all()
+            if not members:
+                return "No family members found. Add someone with add_family_member."
             lines = []
-            for h in humans:
-                age = (
-                    today.year
-                    - h.date_of_birth.year
-                    - (
-                        (today.month, today.day)
-                        < (h.date_of_birth.month, h.date_of_birth.day)
-                    )
-                )
+            for m in members:
+                age_str = f"{m.age} yrs" if m.age is not None else "age unknown"
+                bmi_str = f"BMI {m.bmi:.1f}" if m.bmi is not None else ""
                 lines.append(
-                    f"- {h.name}: {h.gender.value}, age {age}, "
-                    f"BMI {h.bmi} ({h.bmi_category})"
+                    f"- {m.name}: {m.gender}, {age_str}"
+                    + (f", {bmi_str}" if bmi_str else "")
                 )
             return "Family members:\n" + "\n".join(lines)
 
         @tool
-        def get_todays_summary(human_name: str) -> str:
+        def get_todays_summary() -> str:
             """
-            Get a brief summary of today's logged data across all domains
-            for a family member.
-
-            Args:
-                human_name: Name of the family member.
+            Return a brief summary of today's date and any context the agents
+            have in memory.  Use this to orient yourself at the start of a
+            session.
             """
-            parts = []
-            meal_summary = nutrition_agent.run(
-                f"Summarise all meals logged today for {human_name} in one or two sentences."
-            )
-            parts.append(f"Nutrition: {meal_summary}")
-
-            health_summary = health_agent.run(
-                f"Summarise any health readings logged today for {human_name} briefly."
-            )
-            parts.append(f"Health: {health_summary}")
-
-            exercise_summary = exercise_agent.run(
-                f"Summarise any exercise logged today for {human_name} briefly."
-            )
-            parts.append(f"Exercise: {exercise_summary}")
-
-            return "\n".join(parts)
+            return f"Today is {date.today().isoformat()}."
 
         return [
             ask_nutrition_agent,

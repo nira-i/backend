@@ -2,13 +2,11 @@
 
 from typing import Any
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-
 from nira_backend.agents.base_agent import BaseAgent
 from nira_backend.agents.tools.database_tools import make_shared_db_tools
 from nira_backend.agents.tools.shopping_tools import make_shopping_tools
 from nira_backend.database.connection import DatabaseConnection
-from nira_backend.llm.config import get_api_key
+from nira_backend.llm.factory import build_llm
 
 _SYSTEM_PROMPT = """\
 You are NIRA's shopping specialist.  You create practical, personalised
@@ -28,49 +26,34 @@ YOUR PROCESS (always follow this order):
 4. If you need info about a specific family member, call list_family_members.
 
 HOW TO BUILD THE LIST:
-
-Structure the list by category:
-  PROTEINS        — meat, fish, eggs, legumes, dairy proteins
-  VEGETABLES      — prioritise seasonal and any missing groups
-  FRUITS          — prioritise seasonal; aim for variety
-  DAIRY & EGGS    — if not covered above
-  PANTRY STAPLES  — grains, legumes, oils, spices, condiments
-  OPTIONAL / NICE TO HAVE — items that would improve variety or nutrition
-
-For each item include a brief reason in parentheses, e.g.:
-  • Salmon (2 portions) — omega-3s; no fish detected in last 7 days
-  • Kale (1 bunch) — in season; no leafy greens logged this week
-  • Clementines (bag) — seasonal vitamin C; immune support in winter
+- Organise by category: Proteins / Vegetables & Fruit / Dairy & Alternatives /
+  Grains & Pantry / Optional extras
+- For each item, add a short reason: nutritional gap, seasonal, health
+  condition, low stock, or variety
+- Skip items already in the fridge/pantry (unless critically low)
+- End with a 2–3 sentence nutritional rationale
 
 HEALTH-AWARE RULES:
-  - Elevated BP (systolic >130): favour low-sodium options; flag salty items
-  - High blood glucose: prefer low-GI carbs; reduce simple sugars
-  - Poor sleep logged: suggest magnesium-rich foods (leafy greens, nuts, seeds)
-  - Low exercise logged recently: slightly lighter calorie density
+- Elevated blood pressure → favour low-sodium options, add potassium-rich veg
+- High blood glucose → favour low-GI foods, limit refined carbs
+- Poor sleep → include magnesium-rich foods (pumpkin seeds, leafy greens,
+  almonds, dark chocolate)
 
-GENERAL GUIDELINES:
-  - Do NOT suggest items already well-stocked in the fridge/pantry.
-  - DO suggest items that are running low or expiring soon as a "use first" note.
-  - Keep the list practical — 15–25 items total, not an overwhelming catalogue.
-  - Prioritise whole, minimally processed foods.
-  - If multiple people are in the family, balance everyone's needs.
-  - End with a brief (2–3 sentence) NUTRITIONAL RATIONALE explaining the
-    key choices you made and what gaps they address.
+GUIDELINES:
+  - Be specific (e.g. "500g boneless chicken thighs") not vague ("meat").
+  - Quantities should feed the relevant family members for the week.
+  - If unsure about family size or preferences, ask before generating.
 """
 
 
 class ShoppingAgent(BaseAgent):
     """
-    Agent that generates personalised weekly shopping lists.
-
-    Analyses eating patterns, health conditions, nutritional gaps, seasonal
-    produce, and fridge inventory to produce practical, health-aware lists.
+    Agent specialising in personalised weekly shopping list generation.
 
     Args:
         db: Active database connection.
-        api_key: Gemini API key.  Reads from secrets file if not provided.
+        api_key: API key for the active LLM provider. Reads from env/file if absent.
         data_dir: Override data directory for memory (tests).
-        llm_model: Gemini model name.
         temperature: LLM temperature.
     """
 
@@ -79,14 +62,9 @@ class ShoppingAgent(BaseAgent):
         db: DatabaseConnection,
         api_key: str | None = None,
         data_dir: Any = None,
-        llm_model: str = "gemini-2.0-flash",
         temperature: float = 0.4,
     ) -> None:
-        llm = ChatGoogleGenerativeAI(
-            model=llm_model,
-            google_api_key=api_key or get_api_key("gemini"),
-            temperature=temperature,
-        )
+        llm = build_llm("shopping", api_key=api_key, temperature=temperature)
         tools = make_shared_db_tools(db) + make_shopping_tools(db)
         super().__init__(
             name="shopping",

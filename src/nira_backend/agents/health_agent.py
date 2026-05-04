@@ -2,8 +2,6 @@
 
 from typing import Any
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-
 from nira_backend.agents.base_agent import BaseAgent
 from nira_backend.agents.tools.database_tools import (
     make_incident_db_tools,
@@ -18,7 +16,7 @@ from nira_backend.agents.tools.parsing_tools import (
     make_incident_parsing_tools,
 )
 from nira_backend.database.connection import DatabaseConnection
-from nira_backend.llm.config import get_api_key
+from nira_backend.llm.factory import build_llm
 
 _SYSTEM_PROMPT = """\
 You are NIRA's health specialist.  You help the family track and understand
@@ -65,9 +63,8 @@ class HealthAgent(BaseAgent):
 
     Args:
         db: Active database connection.
-        api_key: Gemini API key.  Reads from secrets file if not provided.
+        api_key: API key for the active LLM provider. Reads from env/file if absent.
         data_dir: Override data directory for memory (tests).
-        llm_model: Gemini model name.
         temperature: LLM temperature.
     """
 
@@ -76,14 +73,9 @@ class HealthAgent(BaseAgent):
         db: DatabaseConnection,
         api_key: str | None = None,
         data_dir: Any = None,
-        llm_model: str = "gemini-2.0-flash",
         temperature: float = 0.2,
     ) -> None:
-        llm = ChatGoogleGenerativeAI(
-            model=llm_model,
-            google_api_key=api_key or get_api_key("gemini"),
-            temperature=temperature,
-        )
+        llm = build_llm("health", api_key=api_key, temperature=temperature)
         tools = (
             make_shared_db_tools(db)
             + make_incident_db_tools(db)

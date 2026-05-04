@@ -1,0 +1,33 @@
+{
+  "_comment": "Set active_provider to 'gemini', 'openai', or 'anthropic'. Each provider section lists the model used per agent. All models here are lightweight / fast variants.",
+  "active_provider": "gemini",
+  "providers": {
+    "gemini": {
+      "models": {
+        "main":      "gemini-2.0-flash",
+        "nutrition": "gemini-2.0-flash",
+        "health":    "gemini-2.0-flash",
+        "exercise":  "gemini-2.0-flash",
+        "shopping":  "gemini-2.0-flash"
+      }
+    },
+    "openai": {
+      "models": {
+        "main":      "gpt-4o-mini",
+        "nutrition": "gpt-4o-mini",
+        "health":    "gpt-4o-mini",
+        "exercise":  "gpt-4o-mini",
+        "shopping":  "gpt-4o-mini"
+      }
+    },
+    "anthropic": {
+      "models": {
+        "main":      "claude-3-5-haiku-20241022",
+        "nutrition": "claude-3-5-haiku-20241022",
+        "health":    "claude-3-5-haiku-20241022",
+        "exercise":  "claude-3-5-haiku-20241022",
+        "shopping":  "claude-3-5-haiku-20241022"
+      }
+    }
+  }
+}
