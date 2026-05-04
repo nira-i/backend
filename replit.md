@@ -59,6 +59,7 @@ src/nira_backend/
     nutrition_agent.py      # NutritionAgent — food, meals, inventory, dietary advice
     health_agent.py         # HealthAgent — blood pressure, glucose, HR, sleep
     exercise_agent.py       # ExerciseAgent — exercise sessions and history
+    shopping_agent.py       # ShoppingAgent — personalised weekly shopping lists
     memory/
       persistent_memory.py  # JSON-backed per-agent conversation history
     tools/
@@ -66,6 +67,7 @@ src/nira_backend/
       database_tools.py     # Read-only DB query tools + fridge queries + dietary context
       entry_tools.py        # Structured data-entry tools (health, meal, exercise, fridge)
       parsing_tools.py      # NL text → Pydantic model → DB (via Gemini); fridge NL parsing
+      shopping_tools.py     # Shopping context aggregator + seasonal produce guide
 
 tests/
   data_models/              # Pydantic model validation tests
@@ -77,6 +79,7 @@ tests/
     test_memory.py          # PersistentMemory unit tests (no LLM)
     test_tools.py           # Tool factory integration tests (real DB, no LLM)
     test_fridge_tools.py    # Fridge entry, DB query, and dietary context tool tests
+    test_shopping_tools.py  # Shopping context, seasonal data, and gap analysis tests
     test_agents.py          # Agent smoke tests (mocked LLM)
 ```
 
@@ -84,7 +87,7 @@ tests/
 
 ### Design
 
-- **MainAgent** is the sole interface for callers. It orchestrates three specialist subagents
+- **MainAgent** is the sole interface for callers. It orchestrates four specialist subagents
   as LangChain tools.
 - Each subagent has its own **persistent memory** (JSON file in `data/memory/`) and its own
   set of domain-specific tools.
@@ -130,7 +133,21 @@ with MainAgent() as nira:
 | NutritionAgent | log_meal, add_food_item, search_food_catalog, add_to_fridge, update_fridge_quantity, remove_from_fridge | parse_and_log_meal, parse_and_add_to_fridge | list_family_members, get_meal_history, list_fridge_contents, get_expiring_items, **get_dietary_context** |
 | HealthAgent | log_blood_pressure, log_blood_glucose, log_heart_rate, log_sleep | parse_and_log_health | list_family_members, get_health_history |
 | ExerciseAgent | log_exercise | parse_and_log_exercise | list_family_members, get_exercise_history |
+| ShoppingAgent | — | — | list_family_members, **get_shopping_context**, **get_seasonal_foods** |
 | MainAgent | add_family_member, list_family_members | — | get_todays_summary |
+
+### Shopping List Flow
+
+When asked for a shopping list, `ShoppingAgent`:
+1. Calls `get_shopping_context(human_names, days, include_fridge)` — aggregates:
+   - Recent meal patterns (last 7 days by default) with qualitative nutritional gap analysis
+   - Health conditions (elevated BP → low-sodium; high glucose → low-GI; poor sleep → magnesium-rich)
+   - Seasonal produce guide for the current month (Northern Hemisphere)
+   - Fridge/pantry inventory so it doesn't recommend items already in stock
+2. Optionally calls `get_seasonal_foods` for a deeper seasonal guide
+3. Generates a categorised list (Proteins / Vegetables / Fruits / Dairy / Pantry / Optional)
+4. Each item includes a brief reason: nutritional gap, seasonal, health condition, or low stock
+5. Ends with a short nutritional rationale explaining the key choices
 
 ### Dietary Suggestions Flow
 

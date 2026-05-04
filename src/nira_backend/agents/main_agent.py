@@ -16,6 +16,7 @@ from nira_backend.agents.base_agent import BaseAgent
 from nira_backend.agents.exercise_agent import ExerciseAgent
 from nira_backend.agents.health_agent import HealthAgent
 from nira_backend.agents.nutrition_agent import NutritionAgent
+from nira_backend.agents.shopping_agent import ShoppingAgent
 from nira_backend.config import get_database_path
 from nira_backend.data_models.human import Human
 from nira_backend.database.connection import DatabaseConnection
@@ -26,15 +27,19 @@ _SYSTEM_PROMPT = """\
 You are NIRA, a personal AI assistant for family health and wellness management.
 You are warm, supportive, and practical.
 
-You manage three specialist agents:
-- Nutrition Agent: food logging, meals, nutritional analysis, food catalog.
-- Health Agent: blood pressure, blood glucose, heart rate, sleep tracking.
+You manage four specialist agents:
+- Nutrition Agent: food/meal logging, nutritional analysis, fridge/pantry inventory,
+  dietary suggestions based on recent habits and available ingredients.
+- Health Agent: blood pressure, blood glucose, heart rate, sleep tracking and trends.
 - Exercise Agent: exercise sessions, activity history, fitness motivation.
+- Shopping Agent: personalised weekly shopping lists based on eating habits, health
+  conditions, nutritional gaps, seasonal produce, and fridge inventory.
 
 How to handle requests:
-- For food/meal/nutrition queries → delegate to the Nutrition Agent.
-- For health readings/records/trends → delegate to the Health Agent.
-- For exercise/activity/fitness queries → delegate to the Exercise Agent.
+- For food/meal/nutrition/fridge/inventory/dietary advice → delegate to the Nutrition Agent.
+- For health readings, records, or trends → delegate to the Health Agent.
+- For exercise, workouts, or activity → delegate to the Exercise Agent.
+- For shopping lists, groceries, what to buy, weekly shop → delegate to the Shopping Agent.
 - For general family management (adding members, listing family) → handle directly.
 - When a request spans multiple domains, consult each relevant agent in turn.
 
@@ -84,6 +89,9 @@ class MainAgent(BaseAgent):
             db=self._db, api_key=resolved_api_key, data_dir=data_dir
         )
         self._exercise_agent = ExerciseAgent(
+            db=self._db, api_key=resolved_api_key, data_dir=data_dir
+        )
+        self._shopping_agent = ShoppingAgent(
             db=self._db, api_key=resolved_api_key, data_dir=data_dir
         )
 
@@ -139,6 +147,7 @@ class MainAgent(BaseAgent):
         nutrition_agent = self._nutrition_agent
         health_agent = self._health_agent
         exercise_agent = self._exercise_agent
+        shopping_agent = self._shopping_agent
         db = self._db
 
         @tool
@@ -176,6 +185,19 @@ class MainAgent(BaseAgent):
                 query: The specific question or task for the Exercise Agent.
             """
             return exercise_agent.run(query)
+
+        @tool
+        def ask_shopping_agent(query: str) -> str:
+            """
+            Delegate a shopping list or grocery planning request to the Shopping
+            Agent.  Use for generating weekly shopping lists, recommending what
+            to buy based on eating habits and health, or asking what groceries
+            would improve the family's nutritional balance.
+
+            Args:
+                query: The specific shopping or grocery question.
+            """
+            return shopping_agent.run(query)
 
         @tool
         def add_family_member(
@@ -264,6 +286,7 @@ class MainAgent(BaseAgent):
             ask_nutrition_agent,
             ask_health_agent,
             ask_exercise_agent,
+            ask_shopping_agent,
             add_family_member,
             list_family_members,
             get_todays_summary,

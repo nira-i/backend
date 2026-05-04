@@ -5,6 +5,7 @@ from nira_backend.agents.tools.database_tools import (
     make_fridge_db_tools,
     make_dietary_tools,
 )
+from nira_backend.agents.tools.shopping_tools import make_shopping_tools
 from nira_backend.agents.tools.entry_tools import (
     make_health_entry_tools,
     make_meal_entry_tools,
@@ -22,6 +23,7 @@ __all__ = [
     "make_shared_db_tools",
     "make_fridge_db_tools",
     "make_dietary_tools",
+    "make_shopping_tools",
     "make_health_entry_tools",
     "make_meal_entry_tools",
     "make_exercise_entry_tools",
