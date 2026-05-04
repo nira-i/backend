@@ -51,11 +51,16 @@ def get_api_key(provider: str) -> str:
         FileNotFoundError: If the secrets file does not exist.
         ValueError: If no valid key line is found or the key contains spaces.
     """
+    env_var = f"{provider.upper()}_API_KEY"
+    if env_key := __import__("os").environ.get(env_var):
+        return env_key
+
     key_file = _SECRETS_DIR / f"{provider}_api_key.txt"
     if not key_file.exists():
         raise FileNotFoundError(
             f"API key file not found: {key_file}\n"
-            f"Create '{key_file}' and paste your {provider} API key inside."
+            f"Create '{key_file}' and paste your {provider} API key inside,\n"
+            f"or set the {env_var} environment variable."
         )
 
     for raw_line in key_file.read_text(encoding="utf-8").splitlines():
