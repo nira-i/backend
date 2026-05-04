@@ -79,6 +79,32 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS meal_logs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            human_name      TEXT    NOT NULL,
+            food_name       TEXT    NOT NULL,
+            quantity_g      REAL    NOT NULL,
+            meal_type       TEXT    NOT NULL DEFAULT 'other'
+                CHECK (meal_type IN ('breakfast', 'lunch', 'dinner', 'snack', 'other')),
+            log_date        TEXT    NOT NULL,
+            notes           TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS exercise_entries (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            human_name          TEXT    NOT NULL,
+            exercise_date       TEXT    NOT NULL,
+            activity            TEXT    NOT NULL,
+            duration_minutes    INTEGER NOT NULL,
+            intensity           TEXT    NOT NULL DEFAULT 'moderate'
+                CHECK (intensity IN ('light', 'moderate', 'vigorous')),
+            calories_burned     REAL,
+            distance_km         REAL,
+            notes               TEXT,
+            created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_health_records_human_name
             ON health_records (human_name);
         CREATE INDEX IF NOT EXISTS idx_health_records_record_date
@@ -87,6 +113,14 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ON health_records (record_type);
         CREATE INDEX IF NOT EXISTS idx_food_recipe_ingredients_recipe
             ON food_recipe_ingredients (recipe_id);
+        CREATE INDEX IF NOT EXISTS idx_meal_logs_human_name
+            ON meal_logs (human_name);
+        CREATE INDEX IF NOT EXISTS idx_meal_logs_log_date
+            ON meal_logs (log_date);
+        CREATE INDEX IF NOT EXISTS idx_exercise_entries_human_name
+            ON exercise_entries (human_name);
+        CREATE INDEX IF NOT EXISTS idx_exercise_entries_date
+            ON exercise_entries (exercise_date);
     """)
 
     conn.commit()

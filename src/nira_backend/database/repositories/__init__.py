@@ -6,10 +6,14 @@ from nira_backend.database.repositories.food_repository import (
     FoodRecipeRepository,
 )
 from nira_backend.database.repositories.health_repository import HealthRecordRepository
+from nira_backend.database.repositories.meal_repository import MealLogRepository
+from nira_backend.database.repositories.exercise_repository import ExerciseRepository
 
 __all__ = [
     "HumanRepository",
     "FoodItemRepository",
     "FoodRecipeRepository",
     "HealthRecordRepository",
+    "MealLogRepository",
+    "ExerciseRepository",
 ]

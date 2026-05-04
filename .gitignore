@@ -206,8 +206,15 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# NIRA local configuration (contains database path)
+# NIRA local configuration (contains database path and data_dir)
 config/local.json
 
 # NIRA secrets (API keys - never commit these)
 secrets/*.txt
+
+# NIRA runtime data — stays on the local device (Raspberry Pi or dev machine)
+data/memory/
+data/entries/
+
+# NIRA SQLite databases
+*.db

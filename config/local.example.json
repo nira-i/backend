@@ -1,3 +1,4 @@
 {
-    "database_path": "/home/pi/nira/nira_data.db"
+    "database_path": "/home/pi/nira/nira_data.db",
+    "data_dir": "/home/pi/nira/data"
 }
