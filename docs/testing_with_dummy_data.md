@@ -1,6 +1,6 @@
 # Testing NIRA with Dummy Data
 
-This guide walks through seeding a realistic family dataset and verifying every major feature. Steps 1–3 require no API key. Step 4 (live agent) requires `secrets/gemini_api_key.txt`.
+This guide walks through seeding a realistic family dataset and verifying every major feature. Steps 1–3 require no API key. Step 4 (live agent) requires an API key for whichever provider you choose — Gemini, OpenAI, or Anthropic.
 
 ---
 
@@ -21,7 +21,7 @@ Verify the codebase is healthy before touching any live data.
 python -m pytest tests/ --no-cov -q
 ```
 
-Expected output: **400 passed**.
+Expected output: **392 passed**.
 
 ---
 
@@ -358,16 +358,80 @@ python scripts/check_data.py
 
 ## Step 4 — Live agent test (requires API key)
 
-Add your Gemini API key:
+### 4a — Choose your provider
+
+Open `config/models.json` and set `active_provider` to one of `"gemini"`, `"openai"`, or `"anthropic"`. All agents will use that provider automatically.
+
+```json
+{
+  "active_provider": "gemini",
+  ...
+}
+```
+
+### 4b — Supply an API key
+
+Pick the tab for your chosen provider and run the matching command:
+
+**Gemini**
 
 ```bash
-echo "YOUR_API_KEY" > secrets/gemini_api_key.txt
+mkdir -p secrets
+echo "YOUR_GEMINI_API_KEY" > secrets/gemini_api_key.txt
 ```
+
+Alternatively, export the environment variable:
+
+```bash
+export GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
+```
+
+Get a key at <https://aistudio.google.com/apikey>.
+
+---
+
+**OpenAI**
+
+```bash
+mkdir -p secrets
+echo "YOUR_OPENAI_API_KEY" > secrets/openai_api_key.txt
+```
+
+Or via environment variable:
+
+```bash
+export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+```
+
+Get a key at <https://platform.openai.com/api-keys>. The default model is `gpt-4o-mini`.
+
+---
+
+**Anthropic**
+
+```bash
+mkdir -p secrets
+echo "YOUR_ANTHROPIC_API_KEY" > secrets/anthropic_api_key.txt
+```
+
+Or via environment variable:
+
+```bash
+export ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"
+```
+
+Get a key at <https://console.anthropic.com/settings/keys>. The default model is `claude-3-5-haiku-20241022`.
+
+---
+
+> **Switching providers mid-session** — just change `active_provider` in `config/models.json` and re-run. No code changes needed.
+
+### 4c — Run the smoke test
 
 Create `scripts/smoke_test.py`:
 
 ```python
-"""End-to-end smoke test through MainAgent (requires Gemini API key)."""
+"""End-to-end smoke test through MainAgent (requires an API key for the active provider)."""
 
 from nira_backend.agents import MainAgent
 
