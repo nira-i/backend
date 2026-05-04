@@ -26,9 +26,11 @@ from nira_backend.data_models.health_record import (
 )
 from nira_backend.database.connection import DatabaseConnection
 from nira_backend.data_models.food_inventory import FridgeItem
+from nira_backend.data_models.health_incident import HealthIncident, IncidentType, Severity
 from nira_backend.database.repositories import (
     ExerciseRepository,
     FridgeInventoryRepository,
+    HealthIncidentRepository,
     HealthRecordRepository,
     MealLogRepository,
 )
@@ -412,3 +414,116 @@ def make_fridge_parsing_tools(db: DatabaseConnection, llm: Any) -> list:
         return f"Added {len(results)} item(s) to inventory:\n{summary}"
 
     return [parse_and_add_to_fridge]
+
+
+# ---------------------------------------------------------------------------
+# Health incident parsing tools
+# ---------------------------------------------------------------------------
+
+
+class _IncidentExtract(BaseModel):
+    """Structured data extracted from a natural-language health incident."""
+
+    description: str = Field(description="Clear summary of the health event")
+    incident_type: IncidentType = Field(
+        default="other",
+        description="Category: illness, injury, pain, fatigue, stress, or other",
+    )
+    symptoms: list[str] = Field(
+        default_factory=list,
+        description="Specific symptoms or complaints mentioned",
+    )
+    severity: Optional[Severity] = Field(
+        default=None,
+        description="Perceived severity: mild, moderate, or severe",
+    )
+    body_part: Optional[str] = Field(
+        default=None,
+        description="Body part affected, e.g. 'shoulder', 'head', 'chest'",
+    )
+    incident_date: str = Field(
+        description="Date in YYYY-MM-DD format — use today if not mentioned"
+    )
+    notes: Optional[str] = Field(
+        default=None,
+        description="Any extra context, cause, or follow-up mentioned",
+    )
+
+
+def make_incident_parsing_tools(db: DatabaseConnection, llm: Any) -> list:
+    """
+    Return NL-parsing tools for health incidents.
+
+    Args:
+        db: Active database connection.
+        llm: LangChain chat model.
+
+    Returns:
+        List of LangChain tool callables.
+    """
+    incident_repo = HealthIncidentRepository(db)
+
+    @tool
+    def parse_and_log_incident(text: str, human_name: str) -> str:
+        """
+        Parse a natural-language description of a health incident and record it.
+
+        Use this when the user describes any health event in free text, such as:
+        - 'Alice had shoulder pain because of working long hours'
+        - 'I felt sick with a fever and sore throat since yesterday'
+        - 'John sprained his ankle playing football'
+        - 'Mum has been feeling very fatigued and stressed this week'
+
+        The AI will extract the incident type, affected body part, symptoms,
+        severity, and date automatically.
+
+        Args:
+            text: Free-text description of the health incident.
+            human_name: Name of the affected family member.
+        """
+        structured_llm = llm.with_structured_output(_IncidentExtract)
+        today_str = date.today().isoformat()
+        prompt = (
+            f"Extract health incident details from this text.\n"
+            f"Today's date is {today_str}. Convert relative dates like 'yesterday' "
+            f"or 'since Monday' to absolute YYYY-MM-DD dates.\n"
+            f"The affected person is: {human_name}\n"
+            f"Text: {text}"
+        )
+        try:
+            extracted: _IncidentExtract = structured_llm.invoke(prompt)
+        except Exception as exc:
+            return f"Failed to extract incident details: {exc}"
+
+        try:
+            idate = date.fromisoformat(extracted.incident_date)
+        except (ValueError, TypeError):
+            idate = date.today()
+
+        incident = HealthIncident(
+            human_name=human_name,
+            incident_date=idate,
+            description=extracted.description,
+            symptoms=extracted.symptoms,
+            severity=extracted.severity,
+            body_part=extracted.body_part,
+            incident_type=extracted.incident_type,
+            notes=extracted.notes,
+        )
+        try:
+            iid = incident_repo.create(incident)
+        except Exception as exc:
+            return f"Failed to save incident: {exc}"
+
+        parts = [f"Recorded {extracted.incident_type} for {human_name} on {idate}"]
+        if extracted.body_part:
+            parts.append(f"body part: {extracted.body_part}")
+        if extracted.severity:
+            parts.append(f"severity: {extracted.severity}")
+        if extracted.symptoms:
+            parts.append(f"symptoms: {', '.join(extracted.symptoms)}")
+        if extracted.notes:
+            parts.append(f"notes: {extracted.notes}")
+        return " | ".join(parts) + f" [ID {iid}]"
+
+    return [parse_and_log_incident]

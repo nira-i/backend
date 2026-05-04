@@ -117,6 +117,20 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ON meal_logs (human_name);
         CREATE INDEX IF NOT EXISTS idx_meal_logs_log_date
             ON meal_logs (log_date);
+        CREATE TABLE IF NOT EXISTS health_incidents (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            human_name      TEXT    NOT NULL,
+            incident_date   TEXT    NOT NULL,
+            description     TEXT    NOT NULL,
+            symptoms        TEXT,
+            severity        TEXT    CHECK (severity IN ('mild', 'moderate', 'severe')),
+            body_part       TEXT,
+            incident_type   TEXT    NOT NULL DEFAULT 'other'
+                CHECK (incident_type IN ('illness', 'injury', 'pain', 'fatigue', 'stress', 'other')),
+            notes           TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS fridge_inventory (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             food_name       TEXT    NOT NULL,
@@ -140,6 +154,12 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ON fridge_inventory (location);
         CREATE INDEX IF NOT EXISTS idx_fridge_inventory_expiry
             ON fridge_inventory (expiry_date);
+        CREATE INDEX IF NOT EXISTS idx_health_incidents_human_name
+            ON health_incidents (human_name);
+        CREATE INDEX IF NOT EXISTS idx_health_incidents_date
+            ON health_incidents (incident_date);
+        CREATE INDEX IF NOT EXISTS idx_health_incidents_type
+            ON health_incidents (incident_type);
     """)
 
     conn.commit()

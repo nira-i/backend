@@ -21,10 +21,12 @@ from nira_backend.data_models.health_record import (
 )
 from nira_backend.database.connection import DatabaseConnection
 from nira_backend.data_models.food_inventory import FridgeItem
+from nira_backend.data_models.health_incident import HealthIncident
 from nira_backend.database.repositories import (
     ExerciseRepository,
     FoodItemRepository,
     FridgeInventoryRepository,
+    HealthIncidentRepository,
     HealthRecordRepository,
     MealLogRepository,
 )
@@ -491,3 +493,80 @@ def make_fridge_entry_tools(db: DatabaseConnection) -> list:
         return f"Removed '{food_name}' from inventory."
 
     return [add_to_fridge, update_fridge_quantity, remove_from_fridge]
+
+
+# ---------------------------------------------------------------------------
+# Health incident entry tools
+# ---------------------------------------------------------------------------
+
+
+def make_incident_entry_tools(db: DatabaseConnection) -> list:
+    """
+    Return structured entry tools for health incidents.
+
+    Args:
+        db: Active database connection.
+
+    Returns:
+        List of LangChain tool callables.
+    """
+    incident_repo = HealthIncidentRepository(db)
+
+    @tool
+    def log_health_incident(
+        human_name: str,
+        description: str,
+        incident_type: str = "other",
+        incident_date: str = None,
+        severity: str = None,
+        body_part: str = None,
+        symptoms: str = None,
+        notes: str = None,
+    ) -> str:
+        """
+        Record a health incident or symptom event for a family member.
+
+        Use this for non-metric health events: illnesses (fever, cold, flu),
+        injuries (sprain, cut), pain episodes (headache, back pain, shoulder
+        pain), fatigue, stress, or any other health complaint.
+
+        Args:
+            human_name: Name of the affected person.
+            description: Clear description of what happened.
+            incident_type: One of 'illness', 'injury', 'pain', 'fatigue',
+                           'stress', 'other'.
+            incident_date: Date in YYYY-MM-DD format (defaults to today).
+            severity: One of 'mild', 'moderate', 'severe' (optional).
+            body_part: Body part affected, e.g. 'shoulder', 'head' (optional).
+            symptoms: Comma-separated list of specific symptoms (optional).
+            notes: Additional context or follow-up notes (optional).
+        """
+        from datetime import date as _date
+
+        idate = _date.fromisoformat(incident_date) if incident_date else _date.today()
+        symptom_list = (
+            [s.strip() for s in symptoms.split(",") if s.strip()]
+            if symptoms
+            else []
+        )
+        incident = HealthIncident(
+            human_name=human_name,
+            incident_date=idate,
+            description=description,
+            symptoms=symptom_list,
+            severity=severity,  # type: ignore[arg-type]
+            body_part=body_part,
+            incident_type=incident_type,  # type: ignore[arg-type]
+            notes=notes,
+        )
+        iid = incident_repo.create(incident)
+        parts = [f"Recorded {incident_type} for {human_name} on {idate}"]
+        if body_part:
+            parts.append(f"body part: {body_part}")
+        if severity:
+            parts.append(f"severity: {severity}")
+        if symptom_list:
+            parts.append(f"symptoms: {', '.join(symptom_list)}")
+        return " | ".join(parts) + f" [ID {iid}]"
+
+    return [log_health_incident]

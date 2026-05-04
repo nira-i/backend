@@ -32,6 +32,7 @@ src/nira_backend/
     food_recipe.py          # FoodRecipe, RecipeIngredient
     food_inventory.py       # FridgeItem — fridge/freezer/pantry inventory
     health_record.py        # HealthRecord, BloodPressure, Glucose, HeartRate, Sleep
+    health_incident.py      # HealthIncident — illness/injury/pain/fatigue/stress events
     exercise.py             # ExerciseEntry, MealLog
   database/
     __init__.py
@@ -47,6 +48,7 @@ src/nira_backend/
       meal_repository.py    # MealLogRepository
       exercise_repository.py # ExerciseRepository
       fridge_repository.py  # FridgeInventoryRepository
+      incident_repository.py # HealthIncidentRepository
   llm/
     __init__.py
     base.py                 # BaseLLMProvider abstract class
@@ -57,30 +59,32 @@ src/nira_backend/
     base_agent.py           # BaseAgent: LLM loop, tool calling, memory management
     main_agent.py           # MainAgent — user's only interface; orchestrates subagents
     nutrition_agent.py      # NutritionAgent — food, meals, inventory, dietary advice
-    health_agent.py         # HealthAgent — blood pressure, glucose, HR, sleep
-    exercise_agent.py       # ExerciseAgent — exercise sessions and history
+    health_agent.py         # HealthAgent — metrics + health incidents (NL + structured)
+    exercise_agent.py       # ExerciseAgent — exercise logging, history, recommendations
     shopping_agent.py       # ShoppingAgent — personalised weekly shopping lists
     memory/
       persistent_memory.py  # JSON-backed per-agent conversation history
     tools/
       __init__.py
-      database_tools.py     # Read-only DB query tools + fridge queries + dietary context
-      entry_tools.py        # Structured data-entry tools (health, meal, exercise, fridge)
-      parsing_tools.py      # NL text → Pydantic model → DB (via Gemini); fridge NL parsing
+      database_tools.py     # Read-only DB query tools + fridge + incident + exercise analysis
+      entry_tools.py        # Structured data-entry tools (health, meal, exercise, fridge, incident)
+      parsing_tools.py      # NL text → Pydantic model → DB; fridge + incident NL parsing
       shopping_tools.py     # Shopping context aggregator + seasonal produce guide
 
 tests/
   data_models/              # Pydantic model validation tests
   database/
-    test_fridge_repository.py # FridgeInventoryRepository + FridgeItem property tests
-    ...                     # Other repository and connection tests (use tmp_path)
+    test_fridge_repository.py     # FridgeInventoryRepository + FridgeItem property tests
+    test_incident_repository.py   # HealthIncidentRepository full CRUD + model tests
+    ...                           # Other repository and connection tests (use tmp_path)
   llm/                      # LLM base class tests
   agents/
-    test_memory.py          # PersistentMemory unit tests (no LLM)
-    test_tools.py           # Tool factory integration tests (real DB, no LLM)
-    test_fridge_tools.py    # Fridge entry, DB query, and dietary context tool tests
-    test_shopping_tools.py  # Shopping context, seasonal data, and gap analysis tests
-    test_agents.py          # Agent smoke tests (mocked LLM)
+    test_memory.py                      # PersistentMemory unit tests (no LLM)
+    test_tools.py                       # Tool factory integration tests (real DB, no LLM)
+    test_fridge_tools.py                # Fridge entry, DB query, and dietary context tool tests
+    test_shopping_tools.py              # Shopping context, seasonal data, and gap analysis tests
+    test_incident_and_exercise_tools.py # Incident entry/query + exercise analysis tool tests
+    test_agents.py                      # Agent smoke tests (mocked LLM)
 ```
 
 ## Multi-Agent System
@@ -108,11 +112,16 @@ with MainAgent() as nira:
     nira.chat("Add John Doe to the family, male, born 1985-03-20, 80kg, 178cm")
     nira.chat("John's blood pressure was 125/82 this morning")
 
+    # Health incidents (non-metric events)
+    nira.chat("Alice has been getting shoulder pain after working long hours at her desk")
+    nira.chat("John had a fever and sore throat since yesterday")
+
     # Meal logging
     nira.chat("Jane had a banana and oatmeal for breakfast, about 300g total")
 
-    # Exercise
+    # Exercise + recommendations
     nira.chat("I went for a 5km run, took 28 minutes, felt vigorous")
+    nira.chat("Can you give me an exercise recommendation for this week?")
 
     # Fridge / inventory
     nira.chat("I bought 6 eggs, 500g broccoli, and 1 litre oat milk")
@@ -124,6 +133,9 @@ with MainAgent() as nira:
     # Dietary suggestions
     nira.chat("What should John eat today based on his recent habits?")
     nira.chat("Suggest meals for Jane — check what we have in the fridge")
+
+    # Shopping list
+    nira.chat("Generate a shopping list for the family this week")
 ```
 
 ### Available Tools per Agent
@@ -131,10 +143,36 @@ with MainAgent() as nira:
 | Agent | Structured Tools | NL Parsing Tools | Query / Advisory Tools |
 |-------|-----------------|-----------------|------------------------|
 | NutritionAgent | log_meal, add_food_item, search_food_catalog, add_to_fridge, update_fridge_quantity, remove_from_fridge | parse_and_log_meal, parse_and_add_to_fridge | list_family_members, get_meal_history, list_fridge_contents, get_expiring_items, **get_dietary_context** |
-| HealthAgent | log_blood_pressure, log_blood_glucose, log_heart_rate, log_sleep | parse_and_log_health | list_family_members, get_health_history |
-| ExerciseAgent | log_exercise | parse_and_log_exercise | list_family_members, get_exercise_history |
+| HealthAgent | log_blood_pressure, log_blood_glucose, log_heart_rate, log_sleep, **log_health_incident** | parse_and_log_health, **parse_and_log_incident** | list_family_members, get_health_history, **get_incident_history** |
+| ExerciseAgent | log_exercise | parse_and_log_exercise | list_family_members, get_exercise_history, **get_exercise_analysis_context** |
 | ShoppingAgent | — | — | list_family_members, **get_shopping_context**, **get_seasonal_foods** |
 | MainAgent | add_family_member, list_family_members | — | get_todays_summary |
+
+### Health Incident Flow
+
+When a family member reports a non-metric health event (illness, injury, pain, fatigue, stress), `HealthAgent`:
+1. Routes free-text descriptions through `parse_and_log_incident` — Gemini extracts:
+   - `incident_type` (illness / injury / pain / fatigue / stress / other)
+   - `body_part` (shoulder, head, knee, etc.)
+   - `symptoms` (list of specific complaints)
+   - `severity` (mild / moderate / severe)
+   - `incident_date` (absolute date, resolved from relative references like "yesterday")
+   - `notes` (cause, context, follow-up)
+2. Persists to `health_incidents` table via `HealthIncidentRepository`
+3. Past incidents are retrievable via `get_incident_history` for trend analysis
+
+### Exercise Recommendation Flow
+
+When asked for exercise recommendations, `ExerciseAgent`:
+1. Calls `get_exercise_analysis_context(human_name, days=28)` — analyses 4-week window:
+   - Total sessions, minutes, estimated calories
+   - Activity type breakdown: cardio / strength / flexibility / sports (with % and missing gaps)
+   - Intensity distribution: light / moderate / vigorous (with gap warnings)
+   - Days since last session by type
+   - Rest-day ratio and longest consecutive active streak
+   - Last 7 days detail
+2. Generates 3–5 specific, data-driven recommendations based on actual patterns
+3. Flags missing exercise types, overtraining risks, and recovery gaps
 
 ### Shopping List Flow
 
@@ -161,7 +199,7 @@ When asked for food suggestions, `NutritionAgent`:
 
 ## Database Schema
 
-Eight tables:
+Nine tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -170,9 +208,23 @@ Eight tables:
 | `food_recipes` | Recipes with ingredients |
 | `food_recipe_ingredients` | Recipe–food join table |
 | `health_records` | BP, glucose, HR, sleep readings |
+| `health_incidents` | Non-metric health events (illness, injury, pain, fatigue, stress) |
 | `meal_logs` | What each person ate and when |
 | `exercise_entries` | Exercise sessions per person |
 | `fridge_inventory` | Household food inventory (fridge/freezer/pantry) |
+
+### `health_incidents` columns
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `human_name` | TEXT | Affected family member |
+| `incident_date` | TEXT | ISO date |
+| `description` | TEXT | Summary of the event |
+| `incident_type` | TEXT | `illness`, `injury`, `pain`, `fatigue`, `stress`, `other` |
+| `severity` | TEXT | `mild`, `moderate`, `severe` — optional |
+| `body_part` | TEXT | Affected body part — optional |
+| `symptoms` | TEXT | JSON array of symptom strings |
+| `notes` | TEXT | Extra context or cause — optional |
 
 ### `fridge_inventory` columns
 
@@ -221,3 +273,5 @@ Blank lines and `#` comment lines are ignored.
 python -m pytest tests/ --no-cov -q   # quick summary
 python -m pytest tests/ -v             # verbose with coverage
 ```
+
+Current test count: **400 passing**.
