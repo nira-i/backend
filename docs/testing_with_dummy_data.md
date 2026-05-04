@@ -50,6 +50,7 @@ from nira_backend.data_models.health_record import (
     BloodGlucoseRecord,
     BloodPressureRecord,
     HeartRateRecord,
+    HealthRecord,
     SleepRecord,
 )
 from nira_backend.data_models.human import Human
@@ -80,32 +81,48 @@ health_repo = HealthRecordRepository(db)
 
 # John — slightly elevated blood pressure over the past week
 for days_ago, systolic, diastolic in [(0, 132, 84), (2, 135, 86), (5, 128, 82)]:
-    health_repo.create(BloodPressureRecord(
+    health_repo.create(HealthRecord(
         human_name="John",
         record_date=today - timedelta(days=days_ago),
-        systolic_mmhg=systolic,
-        diastolic_mmhg=diastolic,
+        record_type="blood_pressure",
+        measurement=BloodPressureRecord(
+            systolic_mmhg=systolic,
+            diastolic_mmhg=diastolic,
+        ),
     ))
 
-# Alice — blood glucose and poor sleep
-health_repo.create(BloodGlucoseRecord(
+# Alice — blood glucose (fasting)
+health_repo.create(HealthRecord(
     human_name="Alice",
     record_date=today,
-    glucose_mmol_per_l=5.2,
+    record_type="blood_glucose",
+    measurement=BloodGlucoseRecord(
+        glucose_mmol_l=5.2,
+        measurement_context="fasting",
+    ),
 ))
-for days_ago, hours, quality in [(0, 5.5, "poor"), (1, 6.0, "fair"), (2, 7.5, "good")]:
-    health_repo.create(SleepRecord(
+
+# Alice — sleep (quality: 1=very poor, 2=poor, 3=fair, 4=good, 5=excellent)
+for days_ago, duration_hours, quality in [(0, 5.5, 2), (1, 6.0, 3), (2, 7.5, 4)]:
+    health_repo.create(HealthRecord(
         human_name="Alice",
         record_date=today - timedelta(days=days_ago),
-        hours=hours,
-        quality=quality,
+        record_type="sleep",
+        measurement=SleepRecord(
+            duration_hours=duration_hours,
+            quality=quality,
+        ),
     ))
 
-# Alice — heart rate
-health_repo.create(HeartRateRecord(
+# Alice — resting heart rate
+health_repo.create(HealthRecord(
     human_name="Alice",
     record_date=today,
-    bpm=72,
+    record_type="heart_rate",
+    measurement=HeartRateRecord(
+        bpm=72,
+        measurement_context="resting",
+    ),
 ))
 print("✓ Health records added")
 
@@ -209,7 +226,7 @@ for days_ago, food_name, grams, meal_type in meals:
         human_name="Alice",
         log_date=today - timedelta(days=days_ago),
         food_name=food_name,
-        quantity_grams=grams,
+        quantity_g=grams,
         meal_type=meal_type,
     ))
 print("✓ Meal logs added")
