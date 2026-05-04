@@ -3,7 +3,10 @@
 import json
 from pathlib import Path
 
-_CONFIG_PATH = Path("config/models.json")
+# Resolved relative to this file so the path is correct regardless of the
+# working directory the caller uses when running scripts.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_CONFIG_PATH = _PROJECT_ROOT / "config" / "models.json"
 
 _FALLBACK: dict = {
     "active_provider": "gemini",

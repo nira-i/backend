@@ -1,6 +1,6 @@
 {
   "_comment": "Set active_provider to 'gemini', 'openai', or 'anthropic'. Each provider section lists the model used per agent. All models here are lightweight / fast variants.",
-  "active_provider": "gemini",
+  "active_provider": "openai",
   "providers": {
     "gemini": {
       "models": {

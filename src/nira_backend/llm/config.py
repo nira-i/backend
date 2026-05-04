@@ -26,7 +26,10 @@ are ignored, so you can add comments if needed.
 
 from pathlib import Path
 
-_SECRETS_DIR = Path("secrets")
+# Resolved relative to this file so secrets are found regardless of the
+# working directory the caller uses when running scripts.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_SECRETS_DIR = _PROJECT_ROOT / "secrets"
 
 _PLACEHOLDER_PREFIXES = (
     "paste_your",
