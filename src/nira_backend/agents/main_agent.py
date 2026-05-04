@@ -79,8 +79,7 @@ class MainAgent(BaseAgent):
         resolved_api_key = api_key or get_api_key("gemini")
         resolved_db_path = db_path or get_database_path()
 
-        self._db = DatabaseConnection(str(resolved_db_path))
-        self._db.connect()
+        self._db = DatabaseConnection(resolved_db_path)
 
         self._nutrition_agent = NutritionAgent(
             db=self._db, api_key=resolved_api_key, data_dir=data_dir
@@ -130,8 +129,8 @@ class MainAgent(BaseAgent):
         return self.run(message)
 
     def close(self) -> None:
-        """Close the database connection."""
-        self._db.disconnect()
+        """No-op — DatabaseConnection manages connections per-cursor."""
+        pass
 
     def __enter__(self) -> "MainAgent":
         return self
