@@ -25,8 +25,10 @@ from nira_backend.data_models.health_record import (
     SleepRecord,
 )
 from nira_backend.database.connection import DatabaseConnection
+from nira_backend.data_models.food_inventory import FridgeItem
 from nira_backend.database.repositories import (
     ExerciseRepository,
+    FridgeInventoryRepository,
     HealthRecordRepository,
     MealLogRepository,
 )
@@ -307,3 +309,106 @@ def make_exercise_parsing_tools(db: DatabaseConnection, llm: Any) -> list:
             return f"Failed to create exercise entry: {exc}"
 
     return [parse_and_log_exercise]
+
+
+# ---------------------------------------------------------------------------
+# Fridge inventory parsing tools
+# ---------------------------------------------------------------------------
+
+
+class _FridgeSingleExtract(BaseModel):
+    """One food item extracted from natural language for inventory."""
+
+    food_name: str = Field(description="Name of the food item")
+    quantity: float = Field(description="Amount (in the given unit)")
+    unit: Literal["g", "kg", "pieces", "ml", "l"] = Field(
+        default="g", description="Unit: g, kg, pieces, ml, or l"
+    )
+    location: Literal["fridge", "freezer", "pantry", "other"] = Field(
+        default="fridge", description="Where the item is stored"
+    )
+    expiry_date: Optional[str] = Field(
+        default=None,
+        description="Expiry date in YYYY-MM-DD format if mentioned",
+    )
+    notes: Optional[str] = Field(default=None)
+
+
+class _FridgeListExtract(BaseModel):
+    """Multiple food items extracted from a single natural-language statement."""
+
+    items: list[_FridgeSingleExtract] = Field(
+        description="List of food items mentioned"
+    )
+
+
+def make_fridge_parsing_tools(db: DatabaseConnection, llm: Any) -> list:
+    """
+    Return NL-parsing tools for fridge/pantry inventory.
+
+    Args:
+        db: Active database connection.
+        llm: LangChain chat model.
+
+    Returns:
+        List of LangChain tool callables.
+    """
+    fridge_repo = FridgeInventoryRepository(db)
+
+    @tool
+    def parse_and_add_to_fridge(text: str, default_location: str = "fridge") -> str:
+        """
+        Parse a natural-language description of groceries and add them to the inventory.
+
+        Handles multiple items in one sentence, e.g.:
+        'I bought 6 eggs, 500g of broccoli, and 1 litre of oat milk' or
+        'Put 2kg chicken in the freezer, expires next Friday'.
+
+        Args:
+            text: Free-text description of the items to add.
+            default_location: Default storage location if not mentioned
+                              — one of 'fridge', 'freezer', 'pantry', 'other'.
+        """
+        structured_llm = llm.with_structured_output(_FridgeListExtract)
+        today_str = date.today().isoformat()
+        prompt = (
+            f"Extract ALL food items from this text and return them as a list.\n"
+            f"Today's date is {today_str}. Convert relative dates like 'next Friday' "
+            f"or 'in 3 days' to absolute YYYY-MM-DD dates.\n"
+            f"Default location if not stated: {default_location}.\n"
+            f"Text: {text}"
+        )
+        try:
+            extracted: _FridgeListExtract = structured_llm.invoke(prompt)
+        except Exception as exc:
+            return f"Failed to extract inventory items: {exc}"
+
+        if not extracted.items:
+            return "No food items could be identified in the text."
+
+        results = []
+        for ex in extracted.items:
+            try:
+                expiry = date.fromisoformat(ex.expiry_date) if ex.expiry_date else None
+                item = FridgeItem(
+                    food_name=ex.food_name,
+                    quantity=ex.quantity,
+                    unit=ex.unit,
+                    location=ex.location,
+                    added_date=date.today(),
+                    expiry_date=expiry,
+                    notes=ex.notes,
+                )
+                iid = fridge_repo.create(item)
+                expiry_str = f" (expires {ex.expiry_date})" if ex.expiry_date else ""
+                results.append(
+                    f"  ✓ {item.quantity_display} of {item.food_name} → {item.location}"
+                    f"{expiry_str} [ID {iid}]"
+                )
+            except Exception as exc:
+                results.append(f"  ✗ Could not add '{ex.food_name}': {exc}")
+
+        summary = "\n".join(results)
+        return f"Added {len(results)} item(s) to inventory:\n{summary}"
+
+    return [parse_and_add_to_fridge]

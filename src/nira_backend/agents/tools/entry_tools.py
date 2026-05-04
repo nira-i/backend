@@ -20,9 +20,11 @@ from nira_backend.data_models.health_record import (
     SleepRecord,
 )
 from nira_backend.database.connection import DatabaseConnection
+from nira_backend.data_models.food_inventory import FridgeItem
 from nira_backend.database.repositories import (
     ExerciseRepository,
     FoodItemRepository,
+    FridgeInventoryRepository,
     HealthRecordRepository,
     MealLogRepository,
 )
@@ -369,3 +371,123 @@ def make_exercise_entry_tools(db: DatabaseConnection) -> list:
         )
 
     return [log_exercise]
+
+
+# ---------------------------------------------------------------------------
+# Fridge / pantry inventory entry tools
+# ---------------------------------------------------------------------------
+
+
+def make_fridge_entry_tools(db: DatabaseConnection) -> list:
+    """
+    Return tools for managing the household food inventory.
+
+    Args:
+        db: Active database connection.
+
+    Returns:
+        List of LangChain tool callables.
+    """
+    fridge_repo = FridgeInventoryRepository(db)
+
+    @tool
+    def add_to_fridge(
+        food_name: str,
+        quantity: float,
+        unit: str = "g",
+        location: str = "fridge",
+        expiry_date: str = None,
+        notes: str = None,
+    ) -> str:
+        """
+        Add a food item to the household inventory (fridge, freezer, or pantry).
+
+        Args:
+            food_name: Name of the food item, e.g. 'Eggs', 'Broccoli', 'Oat milk'.
+            quantity: Amount to add.
+            unit: Unit of measurement — one of 'g', 'kg', 'pieces', 'ml', 'l'.
+            location: Storage location — one of 'fridge', 'freezer', 'pantry', 'other'.
+            expiry_date: Best-before date in YYYY-MM-DD format (optional).
+            notes: Free-text notes, e.g. 'opened', 'homemade' (optional).
+        """
+        from datetime import date
+
+        expiry = date.fromisoformat(expiry_date) if expiry_date else None
+        item = FridgeItem(
+            food_name=food_name,
+            quantity=quantity,
+            unit=unit,  # type: ignore[arg-type]
+            location=location,  # type: ignore[arg-type]
+            added_date=date.today(),
+            expiry_date=expiry,
+            notes=notes,
+        )
+        iid = fridge_repo.create(item)
+        expiry_str = f", expires {expiry_date}" if expiry_date else ""
+        return (
+            f"Added {item.quantity_display} of {food_name} to {location}"
+            f"{expiry_str} [ID {iid}]"
+        )
+
+    @tool
+    def update_fridge_quantity(food_name: str, new_quantity: float) -> str:
+        """
+        Update the quantity of a food item in the inventory.
+
+        Searches by name (case-insensitive) and updates the first matching item.
+        If new_quantity is 0, the item is removed.
+
+        Args:
+            food_name: Name of the food item to update.
+            new_quantity: New quantity (in the item's existing unit).
+        """
+        items = fridge_repo.search_by_name(food_name)
+        if not items:
+            return f"No inventory item found matching '{food_name}'."
+
+        item = items[0]
+        item_id = None
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM fridge_inventory WHERE food_name LIKE ? LIMIT 1",
+                (f"%{food_name}%",),
+            )
+            row = cursor.fetchone()
+            if row:
+                item_id = row["id"]
+
+        if item_id is None:
+            return f"Could not find ID for '{food_name}'."
+
+        if new_quantity <= 0:
+            fridge_repo.delete(item_id)
+            return f"Removed '{item.food_name}' from inventory (quantity reached 0)."
+
+        fridge_repo.update_quantity(item_id, new_quantity)
+        return f"Updated '{item.food_name}' quantity to {new_quantity} {item.unit}."
+
+    @tool
+    def remove_from_fridge(food_name: str) -> str:
+        """
+        Completely remove a food item from the inventory.
+
+        Searches by name (case-insensitive) and removes the first matching item.
+
+        Args:
+            food_name: Name of the food item to remove.
+        """
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM fridge_inventory WHERE food_name LIKE ? LIMIT 1",
+                (f"%{food_name}%",),
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return f"No inventory item found matching '{food_name}'."
+
+        item_id = row["id"]
+        fridge_repo.delete(item_id)
+        return f"Removed '{food_name}' from inventory."
+
+    return [add_to_fridge, update_fridge_quantity, remove_from_fridge]

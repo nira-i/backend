@@ -6,8 +6,8 @@ Backend component of the NIRA family health and food management system.
 
 A pure Python library (no web server) providing data models, SQLite database management,
 a Gemini LLM integration, and a LangChain-based multi-agent system for tracking food,
-meals, health metrics, and exercise for a family. Designed to run locally on a Raspberry Pi.
-A future separate repo will add an API layer and frontend.
+meals, health metrics, exercise, and household food inventory for a family.
+Designed to run locally on a Raspberry Pi. A future separate repo will add an API layer and frontend.
 
 ## Architecture
 
@@ -30,6 +30,7 @@ src/nira_backend/
     measurements.py         # Weight, Length, BodyShapeMeasurements
     food_item.py            # FoodItem, NutritionalInfo, FoodCategory
     food_recipe.py          # FoodRecipe, RecipeIngredient
+    food_inventory.py       # FridgeItem — fridge/freezer/pantry inventory
     health_record.py        # HealthRecord, BloodPressure, Glucose, HeartRate, Sleep
     exercise.py             # ExerciseEntry, MealLog
   database/
@@ -45,6 +46,7 @@ src/nira_backend/
       health_repository.py  # HealthRecordRepository
       meal_repository.py    # MealLogRepository
       exercise_repository.py # ExerciseRepository
+      fridge_repository.py  # FridgeInventoryRepository
   llm/
     __init__.py
     base.py                 # BaseLLMProvider abstract class
@@ -54,23 +56,27 @@ src/nira_backend/
     __init__.py             # Exports MainAgent (the only public interface)
     base_agent.py           # BaseAgent: LLM loop, tool calling, memory management
     main_agent.py           # MainAgent — user's only interface; orchestrates subagents
-    nutrition_agent.py      # NutritionAgent — food, meals, nutritional analysis
+    nutrition_agent.py      # NutritionAgent — food, meals, inventory, dietary advice
     health_agent.py         # HealthAgent — blood pressure, glucose, HR, sleep
     exercise_agent.py       # ExerciseAgent — exercise sessions and history
     memory/
       persistent_memory.py  # JSON-backed per-agent conversation history
     tools/
-      database_tools.py     # Read-only DB query tools (shared across agents)
-      entry_tools.py        # Structured data-entry tools (health, meal, exercise)
-      parsing_tools.py      # NL text → Pydantic model → DB (via Gemini)
+      __init__.py
+      database_tools.py     # Read-only DB query tools + fridge queries + dietary context
+      entry_tools.py        # Structured data-entry tools (health, meal, exercise, fridge)
+      parsing_tools.py      # NL text → Pydantic model → DB (via Gemini); fridge NL parsing
 
 tests/
   data_models/              # Pydantic model validation tests
-  database/                 # Repository and connection tests (uses tmp_path)
+  database/
+    test_fridge_repository.py # FridgeInventoryRepository + FridgeItem property tests
+    ...                     # Other repository and connection tests (use tmp_path)
   llm/                      # LLM base class tests
   agents/
     test_memory.py          # PersistentMemory unit tests (no LLM)
     test_tools.py           # Tool factory integration tests (real DB, no LLM)
+    test_fridge_tools.py    # Fridge entry, DB query, and dietary context tool tests
     test_agents.py          # Agent smoke tests (mocked LLM)
 ```
 
@@ -95,26 +101,50 @@ tests/
 from nira_backend.agents import MainAgent
 
 with MainAgent() as nira:
-    # Structured intent — MainAgent routes to the right subagent automatically
-    print(nira.chat("Add John Doe to the family, male, born 1985-03-20, 80kg, 178cm"))
-    print(nira.chat("John's blood pressure was 125/82 this morning"))
-    print(nira.chat("Log that Jane had a banana and oatmeal for breakfast, about 300g total"))
-    print(nira.chat("I went for a 5km run, took 28 minutes, felt vigorous"))
-    print(nira.chat("How is John's blood pressure trending this month?"))
+    # Family + health
+    nira.chat("Add John Doe to the family, male, born 1985-03-20, 80kg, 178cm")
+    nira.chat("John's blood pressure was 125/82 this morning")
+
+    # Meal logging
+    nira.chat("Jane had a banana and oatmeal for breakfast, about 300g total")
+
+    # Exercise
+    nira.chat("I went for a 5km run, took 28 minutes, felt vigorous")
+
+    # Fridge / inventory
+    nira.chat("I bought 6 eggs, 500g broccoli, and 1 litre oat milk")
+    nira.chat("Put 2kg chicken breast in the freezer, expires 2026-06-01")
+    nira.chat("What's in the fridge?")
+    nira.chat("Any items expiring soon?")
+    nira.chat("I used all the broccoli")
+
+    # Dietary suggestions
+    nira.chat("What should John eat today based on his recent habits?")
+    nira.chat("Suggest meals for Jane — check what we have in the fridge")
 ```
 
 ### Available Tools per Agent
 
-| Agent | Structured Tools | NL Parsing Tools | Query Tools |
-|-------|-----------------|-----------------|-------------|
-| NutritionAgent | log_meal, add_food_item, search_food_catalog | parse_and_log_meal | list_family_members, get_meal_history |
+| Agent | Structured Tools | NL Parsing Tools | Query / Advisory Tools |
+|-------|-----------------|-----------------|------------------------|
+| NutritionAgent | log_meal, add_food_item, search_food_catalog, add_to_fridge, update_fridge_quantity, remove_from_fridge | parse_and_log_meal, parse_and_add_to_fridge | list_family_members, get_meal_history, list_fridge_contents, get_expiring_items, **get_dietary_context** |
 | HealthAgent | log_blood_pressure, log_blood_glucose, log_heart_rate, log_sleep | parse_and_log_health | list_family_members, get_health_history |
 | ExerciseAgent | log_exercise | parse_and_log_exercise | list_family_members, get_exercise_history |
 | MainAgent | add_family_member, list_family_members | — | get_todays_summary |
 
+### Dietary Suggestions Flow
+
+When asked for food suggestions, `NutritionAgent`:
+1. Calls `get_dietary_context(human_name, days, include_fridge)` — one tool call that bundles:
+   - Recent meal history (default: 7 days)
+   - Recent health metrics (BP, glucose, sleep)
+   - Full fridge/pantry inventory with expiry warnings
+2. Reasons over the combined context to produce personalised, specific meal suggestions
+3. Prioritises ingredients expiring soon and considers health data (e.g. low-sodium if BP is elevated)
+
 ## Database Schema
 
-Five core tables + two new tables:
+Eight tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -125,6 +155,19 @@ Five core tables + two new tables:
 | `health_records` | BP, glucose, HR, sleep readings |
 | `meal_logs` | What each person ate and when |
 | `exercise_entries` | Exercise sessions per person |
+| `fridge_inventory` | Household food inventory (fridge/freezer/pantry) |
+
+### `fridge_inventory` columns
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `food_name` | TEXT | Item name |
+| `quantity` | REAL | Amount in `unit` |
+| `unit` | TEXT | `g`, `kg`, `pieces`, `ml`, `l` |
+| `location` | TEXT | `fridge`, `freezer`, `pantry`, `other` |
+| `added_date` | TEXT | ISO date |
+| `expiry_date` | TEXT | ISO date, optional |
+| `notes` | TEXT | Free text, optional |
 
 ## Configuration (Gitignored Files)
 
